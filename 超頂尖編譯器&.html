@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+
+<html lang="zh-Hant">
+
+<head>
+
+  <meta charset="UTF-8" />
+
+  <title>多檔編輯器（CodeMirror版）</title>
+
+  <!-- CodeMirror -->
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/lib/codemirror.min.css">
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/theme/monokai.min.css">
+
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/lib/codemirror.min.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/mode/htmlmixed/htmlmixed.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/mode/javascript/javascript.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/mode/css/css.js"></script>
+
+  <style>
+
+    body {
+
+      font-family: Consolas, monospace;
+
+      margin: 0;
+
+      padding: 0;
+
+      background-color: #1e1e1e;
+
+      color: #dcdcdc;
+
+    }
+
+    #toolbar {
+
+      background-color: #333;
+
+      padding: 10px;
+
+      display: flex;
+
+      flex-wrap: wrap;
+
+      gap: 10px;
+
+    }
+
+    #toolbar button, #toolbar select, #filename, #extension {
+
+      background: #444;
+
+      color: white;
+
+      border: none;
+
+      padding: 5px 10px;
+
+      font-size: 14px;
+
+      cursor: pointer;
+
+    }
+
+    #filename { width: 180px; }
+
+    #extension { width: 80px; }
+
+    .CodeMirror {
+
+      height: calc(100vh - 120px);
+
+      font-size: 14px;
+
+      line-height: 1.5;
+
+    }
+
+    input[type="file"] {
+
+      display: none;
+
+    }
+
+    #autosaveTip {
+
+      position: fixed;
+
+      top: 10px;
+
+      right: 10px;
+
+      background-color: #2a2;
+
+      color: white;
+
+      padding: 6px 12px;
+
+      border-radius: 6px;
+
+      font-size: 14px;
+
+      opacity: 0;
+
+      transition: opacity 0.3s ease;
+
+      z-index: 9999;
+
+    }
+
+    #autosaveTip.show {
+
+      opacity: 1;
+
+    }
+
+  </style>
+
+</head>
+
+<body>
+
+  <div id="toolbar">
+
+    <button onclick="openFile()">開啟檔案</button>
+
+    <button onclick="saveFile()">儲存目前檔案</button>
+
+    <button onclick="newFile()">新增空白檔案</button>
+
+    <button onclick="closeFile()">關閉目前檔案</button>
+
+    <button onclick="clearEditor()">清除程式碼</button>
+
+    <button onclick="clearAll()">清除全部</button>
+
+    <button onclick="runCode()">執行程式</button>
+
+    <input type="text" id="filename" placeholder="檔名" />
+
+    <input type="text" id="extension" placeholder="副檔名" />
+
+    <select id="fileSelector" onchange="switchFile()"></select>
+
+  </div>
+
+  <textarea id="editor">// 可同時編輯多檔案，從下拉選單切換</textarea>
+
+  <input type="file" id="fileInput" multiple />
+
+  <div id="autosaveTip">已自動儲存</div>
+
+  <script>
+
+    function getModeByExtension(ext) {
+
+      switch (ext.toLowerCase()) {
+
+        case 'html': return 'htmlmixed';
+
+        case 'js': return 'javascript';
+
+        case 'css': return 'css';
+
+        case 'json': return 'application/json';
+
+        case 'txt': return 'text/plain';
+
+        default: return 'text/plain';
+
+      }
+
+    }
+
+    function getMimeByExtension(ext) {
+
+      switch (ext.toLowerCase()) {
+
+        case '.html': return 'text/html';
+
+        case '.js': return 'application/javascript';
+
+        case '.css': return 'text/css';
+
+        case '.json': return 'application/json';
+
+        default: return 'text/plain';
+
+      }
+
+    }
+
+    const fileInput = document.getElementById('fileInput');
+
+    const filenameInput = document.getElementById('filename');
+
+    const extensionInput = document.getElementById('extension');
+
+    const fileSelector = document.getElementById('fileSelector');
+
+    let filesData = JSON.parse(localStorage.getItem('filesData')) || {};
+
+    let currentFile = localStorage.getItem('currentFile') || '';
+
+    let isDirty = false;
+
+    let autosaveTimer = null;
+
+    const cm = CodeMirror.fromTextArea(document.getElementById('editor'), {
+
+      lineNumbers: true,
+
+      mode: 'htmlmixed',
+
+      theme: 'monokai',
+
+      indentUnit: 2,
+
+      tabSize: 2,
+
+      lineWrapping: true
+
+    });
+
+    cm.on('change', () => {
+
+      isDirty = true;
+
+      if (autosaveTimer) clearTimeout(autosaveTimer);
+
+      autosaveTimer = setTimeout(() => {
+
+        saveCurrentContent();
+
+        showAutosaveTip();
+
+      }, 2000);
+
+    });
+
+    function openFile() {
+
+      fileInput.click();
+
+    }
+
+    fileInput.addEventListener('change', (event) => {
+
+      const files = Array.from(event.target.files);
+
+      for (let file of files) {
+
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+
+          const nameParts = file.name.split('.');
+
+          const name = nameParts.slice(0, -1).join('.') || file.name;
+
+          const ext = nameParts.length > 1 ? nameParts.pop() : '';
+
+          filesData[name] = {
+
+            content: e.target.result,
+
+            extension: ext
+
+          };
+
+          if (!Array.from(fileSelector.options).some(o => o.value === name)) {
+
+            const option = document.createElement('option');
+
+            option.value = name;
+
+            option.textContent = name;
+
+            fileSelector.appendChild(option);
+
+          }
+
+          currentFile = name;
+
+          updateEditor();
+
+        };
+
+        reader.readAsText(file);
+
+      }
+
+    });
+
+    function updateEditor() {
+
+      if (!currentFile || !filesData[currentFile]) return;
+
+      const content = filesData[currentFile].content;
+
+      const ext = filesData[currentFile].extension;
+
+      cm.setOption('mode', getModeByExtension(ext));
+
+      cm.setValue(content);
+
+      filenameInput.value = currentFile;
+
+      extensionInput.value = ext;
+
+      fileSelector.value = currentFile;
+
+      isDirty = false;
+
+    }
+
+    function confirmSaveIfDirty() {
+
+      if (isDirty) {
+
+        return confirm("目前檔案尚未儲存，是否儲存？未儲存的變更將會遺失。");
+
+      }
+
+      return true;
+
+    }
+
+    function switchFile() {
+
+      if (!confirmSaveIfDirty()) {
+
+        fileSelector.value = currentFile;
+
+        return;
+
+      }
+
+      saveCurrentContent();
+
+      currentFile = fileSelector.value;
+
+      updateEditor();
+
+    }
+
+    function saveCurrentContent() {
+
+      if (currentFile && filesData[currentFile]) {
+
+        filesData[currentFile].content = cm.getValue();
+
+        isDirty = false;
+
+        localStorage.setItem('filesData', JSON.stringify(filesData));
+
+        localStorage.setItem('currentFile', currentFile);
+
+      }
+
+    }
+
+    function saveFile() {
+
+      saveCurrentContent();
+
+      const name = filenameInput.value.trim() || 'document';
+
+      let ext = extensionInput.value.trim() || 'txt';
+
+      if (!ext.startsWith('.')) ext = '.' + ext;
+
+      const mime = getMimeByExtension(ext);
+
+      const blob = new Blob([filesData[currentFile].content], { type: mime });
+
+      const link = document.createElement('a');
+
+      link.download = name + ext;
+
+      link.href = URL.createObjectURL(blob);
+
+      link.click();
+
+    }
+
+    function clearEditor() {
+
+      cm.setValue('');
+
+      isDirty = true;
+
+    }
+
+    function clearAll() {
+
+      if (confirm("確定要清除程式碼與檔名設定嗎？這將會刪除目前的內容。")) {
+
+        cm.setValue('');
+
+        filenameInput.value = '';
+
+        extensionInput.value = '';
+
+        isDirty = true;
+
+      }
+
+    }
+
+    function closeFile() {
+
+      if (!confirmSaveIfDirty()) return;
+
+      if (!currentFile) return;
+
+      delete filesData[currentFile];
+
+      for (let i = 0; i < fileSelector.options.length; i++) {
+
+        if (fileSelector.options[i].value === currentFile) {
+
+          fileSelector.remove(i);
+
+          break;
+
+        }
+
+      }
+
+      const remainingOptions = fileSelector.options;
+
+      if (remainingOptions.length > 0) {
+
+        currentFile = remainingOptions[0].value;
+
+        updateEditor();
+
+      } else {
+
+        currentFile = '';
+
+        cm.setValue('');
+
+        filenameInput.value = '';
+
+        extensionInput.value = '';
+
+        isDirty = false;
+
+      }
+
+      localStorage.setItem('filesData', JSON.stringify(filesData));
+
+      localStorage.setItem('currentFile', currentFile);
+
+    }
+
+    function newFile() {
+
+      if (!confirmSaveIfDirty()) return;
+
+      let counter = 1;
+
+      let newName;
+
+      do {
+
+        newName = `untitled${counter}`;
+
+        counter++;
+
+      } while (filesData.hasOwnProperty(newName));
+
+      filesData[newName] = {
+
+        content: '',
+
+        extension: 'txt'
+
+      };
+
+      const option = document.createElement('option');
+
+      option.value = newName;
+
+      option.textContent = newName;
+
+      fileSelector.appendChild(option);
+
+      currentFile = newName;
+
+      updateEditor();
+
+      localStorage.setItem('filesData', JSON.stringify(filesData));
+
+      localStorage.setItem('currentFile', currentFile);
+
+    }
+
+    function runCode() {
+
+      const blob = new Blob([cm.getValue()], { type: 'text/html' });
+
+      const url = URL.createObjectURL(blob);
+
+      window.open(url, '_blank');
+
+    }
+
+    function showAutosaveTip() {
+
+      const tip = document.getElementById('autosaveTip');
+
+      tip.classList.add('show');
+
+      setTimeout(() => {
+
+        tip.classList.remove('show');
+
+      }, 2000);
+
+    }
+
+    filenameInput.addEventListener('change', () => {
+
+      const newFilename = filenameInput.value.trim();
+
+      if (newFilename && newFilename !== currentFile) {
+
+        if (filesData[newFilename]) {
+
+          alert('檔名已存在，請使用其他名稱');
+
+        } else {
+
+          filesData[newFilename] = filesData[currentFile];
+
+          delete filesData[currentFile];
+
+          const oldOption = fileSelector.querySelector(`option[value="${currentFile}"]`);
+
+          if (oldOption) {
+
+            oldOption.value = newFilename;
+
+            oldOption.textContent = newFilename;
+
+          }
+
+          currentFile = newFilename;
+
+          fileSelector.value = newFilename;
+
+          localStorage.setItem('filesData', JSON.stringify(filesData));
+
+          localStorage.setItem('currentFile', currentFile);
+
+        }
+
+      }
+
+    });
+
+    document.addEventListener('keydown', (e) => {
+
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+
+        e.preventDefault();
+
+        saveFile();
+
+      }
+
+    });
+
+  </script>
+
+</body>
+
+</html>
